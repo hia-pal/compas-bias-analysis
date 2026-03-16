@@ -1,0 +1,232 @@
+ProPublica COMPAS dataset
+
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Load directly from GitHub — no download needed!
+url = "https://raw.githubusercontent.com/propublica/compas-analysis/master/compas-scores-two-years.csv"
+df = pd.read_csv(url)
+
+# Basic cleaning (standard for this dataset)
+df = df[(df['days_b_screening_arrest'] <= 30) &
+        (df['days_b_screening_arrest'] >= -30) &
+        (df['is_recid'] != -1) &
+        (df['c_charge_degree'] != 'O') &
+        (df['score_text'] != 'N/A')]
+
+# Quick look
+print(df.shape)           # how many rows/columns
+print(df['race'].value_counts())   # how many per race
+df.head()
+
+Clean the Data:
+df = df[(df['days_b_screening_arrest'] <= 30) &
+        (df['days_b_screening_arrest'] >= -30)]
+
+print("Rows after timing filter:", len(df))
+df = df[df['is_recid'] != -1]
+
+print("Rows after recidivism filter:", len(df))
+df = df[df['c_charge_degree'] != 'O']
+
+print("Rows after charge filter:", len(df))
+# Focus on African-American vs Caucasian
+# Other groups have too few rows for reliable analysis
+df = df[df['race'].isin(['African-American', 'Caucasian'])]
+
+print("Rows after race filter:", len(df))
+print(df['race'].value_counts())
+# Reset row numbers after all the filtering
+df = df.reset_index(drop=True)
+
+# Final check — print a summary
+print("=== FINAL DATASET ===")
+print("Total rows:  ", len(df))
+print("Total cols:  ", len(df.columns))
+print("Race counts:\n", df['race'].value_counts())
+print("Missing values:\n", df[['race', 'decile_score', 'priors_count']].isnull().sum())
+
+EDA
+# Count defendants by race
+race_counts = df['race'].value_counts()
+print(race_counts)
+
+# Also show as percentage
+print("\nAs percentage:")
+print((race_counts / len(df) * 100).round(1))
+# Mean and median decile score per race
+score_stats = df.groupby('race')['decile_score'].agg([
+    'mean', 'median', 'std'
+]).round(2)
+
+print(score_stats)
+# If Black defendants have more priors, higher scores could be "fair"
+# Let's check if priors explain the gap
+priors_stats = df.groupby('race')['priors_count'].agg([
+    'mean', 'median'
+]).round(2)
+# High risk = decile score 8, 9, or 10
+df['high_risk'] = df['decile_score'] >= 8
+
+high_risk_pct = df.groupby('race')['high_risk'].mean() * 100
+print(high_risk_pct.round(1))
+# False positive = labelled high risk but did NOT reoffend
+# False negative = labelled low risk but DID reoffend
+
+for race in ['African-American', 'Caucasian']:
+    subset = df[df['race'] == race]
+
+    fp = subset[(subset['high_risk'] == True) &
+                (subset['is_recid'] == 0)]
+
+    fn = subset[(subset['high_risk'] == False) &
+                (subset['is_recid'] == 1)]
+
+    fp_rate = len(fp) / len(subset) * 100
+    fn_rate = len(fn) / len(subset) * 100
+
+    print(f"\n{race}")
+    print(f"  False positive rate: {fp_rate:.1f}%")
+    print(f"  False negative rate: {fn_rate:.1f}%")
+
+Visualization:
+# Chart 1 — Average risk score by race
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+avg_scores = df.groupby('race')['decile_score'].mean()
+
+plt.figure(figsize=(7, 5))
+colors = ['#E24B4A', '#378ADD']
+bars = plt.bar(avg_scores.index, avg_scores.values, color=colors, width=0.5, edgecolor='white')
+
+# Add value labels on top of bars
+for bar in bars:
+    plt.text(bar.get_x() + bar.get_width()/2,
+             bar.get_height() + 0.05,
+             f'{bar.get_height():.2f}',
+             ha='center', fontsize=12, fontweight='bold')
+
+plt.title('Average COMPAS Risk Score by Race', fontsize=14, fontweight='bold')
+plt.ylabel('Average Decile Score (1-10)')
+plt.ylim(0, 8)
+plt.axhline(y=5, color='gray', linestyle='--', alpha=0.5, label='Score of 5 (midpoint)')
+plt.legend()
+plt.tight_layout()
+plt.savefig('chart1_avg_score.png', dpi=150)
+plt.show()
+# Chart 2 — Score distribution by race
+plt.figure(figsize=(9, 5))
+
+for race, color in zip(['African-American', 'Caucasian'],
+                          ['#E24B4A', '#378ADD']):
+    subset = df[df['race'] == race]
+    plt.hist(subset['decile_score'], bins=10, alpha=0.6,
+             color=color, label=race, edgecolor='white', density=True)
+
+plt.title('Distribution of COMPAS Risk Scores by Race', fontsize=14, fontweight='bold')
+plt.xlabel('COMPAS Decile Score (1 = lowest risk, 10 = highest)')
+plt.ylabel('Proportion of Defendants')
+plt.legend()
+plt.tight_layout()
+plt.savefig('chart2_distribution.png', dpi=150)
+plt.show()
+# Chart 3 — % flagged high risk by race
+high_risk_pct = df.groupby('race')['high_risk'].mean() * 100
+
+plt.figure(figsize=(7, 5))
+colors = ['#E24B4A', '#378ADD']
+bars = plt.bar(high_risk_pct.index, high_risk_pct.values,
+               color=colors, width=0.5, edgecolor='white')
+
+for bar in bars:
+    plt.text(bar.get_x() + bar.get_width()/2,
+             bar.get_height() + 0.5,
+             f'{bar.get_height():.1f}%',
+             ha='center', fontsize=12, fontweight='bold')
+
+plt.title('Percentage of Defendants Labelled High Risk\nby Race (Score ≥ 8)',
+          fontsize=14, fontweight='bold')
+plt.ylabel('% Labelled High Risk')
+plt.ylim(0, 35)
+plt.tight_layout()
+plt.savefig('chart3_highrisk.png', dpi=150)
+plt.show()
+# Chart 4 — Score by race AND priors (grouped)
+# Group priors into buckets for cleaner chart
+df['priors_bucket'] = pd.cut(df['priors_count'],
+    bins=[-1, 0, 2, 5, 100],
+    labels=['0 priors', '1-2 priors', '3-5 priors', '6+ priors'])
+
+grouped = df.groupby(['priors_bucket', 'race'])['decile_score'].mean().unstack()
+
+ax = grouped.plot(kind='bar', figsize=(10, 6),
+                  color=['#E24B4A', '#378ADD'],
+                  edgecolor='white', width=0.6)
+
+plt.title('Average Risk Score by Race and Prior Crimes\n(Same criminal history, different scores?)',
+          fontsize=14, fontweight='bold')
+plt.xlabel('Number of Prior Crimes')
+plt.ylabel('Average COMPAS Score')
+plt.xticks(rotation=0)
+plt.legend(title='Race')
+plt.tight_layout()
+plt.savefig('chart4_priors.png', dpi=150)
+plt.show()
+# Chart 5 — Heatmap of score category vs race
+df['score_category'] = pd.cut(df['decile_score'],
+    bins=[0, 4, 7, 10],
+    labels=['Low (1-4)', 'Medium (5-7)', 'High (8-10)'])
+
+heatmap_data = df.groupby(['race', 'score_category']).size().unstack()
+heatmap_pct = heatmap_data.div(heatmap_data.sum(axis=1), axis=0) * 100
+
+plt.figure(figsize=(8, 4))
+sns.heatmap(heatmap_pct, annot=True, fmt='.1f', cmap='RdYlGn_r',
+            linewidths=0.5, cbar_kws={'label': '% of defendants'})
+
+plt.title('% of Defendants in Each Risk Category by Race',
+          fontsize=14, fontweight='bold')
+plt.ylabel('')
+plt.xlabel('Risk Category')
+plt.tight_layout()
+plt.savefig('chart5_heatmap.png', dpi=150)
+plt.show()
+# Chart 6 — False positive and false negative rates by race
+error_data = {'Race': [], 'Error Type': [], 'Rate': []}
+
+for race in ['African-American', 'Caucasian']:
+    subset = df[df['race'] == race]
+    fp = len(subset[(subset['high_risk']==True) & (subset['is_recid']==0)]) / len(subset) * 100
+    fn = len(subset[(subset['high_risk']==False) & (subset['is_recid']==1)]) / len(subset) * 100
+    error_data['Race'].extend([race, race])
+    error_data['Error Type'].extend(['False Positive\n(wrongly flagged dangerous)',
+                                        'False Negative\n(wrongly flagged safe)'])
+    error_data['Rate'].extend([fp, fn])
+
+error_df = pd.DataFrame(error_data)
+
+plt.figure(figsize=(9, 5))
+x = [0, 1]
+width = 0.35
+aa = error_df[error_df['Race']=='African-American']['Rate'].values
+ca = error_df[error_df['Race']=='Caucasian']['Rate'].values
+
+bars1 = plt.bar([i - width/2 for i in x], aa, width, label='African-American', color='#E24B4A')
+bars2 = plt.bar([i + width/2 for i in x], ca, width, label='Caucasian', color='#378ADD')
+
+for bar in list(bars1) + list(bars2):
+    plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.3,
+             f'{bar.get_height():.1f}%', ha='center', fontsize=10, fontweight='bold')
+
+plt.xticks(x, ['False Positive\n(wrongly flagged dangerous)',
+               'False Negative\n(wrongly flagged safe)'])
+plt.ylabel('% of Defendants')
+plt.title('Algorithm Error Rates by Race', fontsize=14, fontweight='bold')
+plt.legend()
+plt.tight_layout()
+plt.savefig('chart6_errors.png', dpi=150)
+plt.show()
+
